@@ -2839,8 +2839,9 @@ public class DefaultCodegen {
      * @return true if the library/module/package of the corresponding type needs to be imported
      */
     protected boolean needToImport(String type) {
-        return !defaultIncludes.contains(type)
-            && !languageSpecificPrimitives.contains(type);
+	//according to https://github.com/swagger-api/swagger-codegen/pull/6868
+        return !StringUtils.isEmpty(type) && !defaultIncludes.contains(type)
+                && !languageSpecificPrimitives.contains(type);
     }
 
     @SuppressWarnings("static-method")

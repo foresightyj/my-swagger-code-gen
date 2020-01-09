@@ -12,6 +12,7 @@ import io.swagger.codegen.auth.AuthParser;
 import io.swagger.models.Swagger;
 import io.swagger.models.auth.AuthorizationValue;
 import io.swagger.parser.SwaggerParser;
+import io.swagger.parser.util.ClasspathHelper;
 import io.swagger.util.Json;
 import org.apache.commons.lang3.Validate;
 import org.slf4j.Logger;
@@ -21,13 +22,25 @@ import java.io.File;
 import java.io.IOException;
 import java.io.Serializable;
 import java.nio.file.Paths;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
 import static org.apache.commons.lang3.StringUtils.isNotEmpty;
+import java.net.URI;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+
+import io.swagger.models.Model;
+import io.swagger.models.properties.AbstractProperty;
+import io.swagger.models.properties.Property;
+
+import io.swagger.parser.util.RemoteUrl;
+import org.apache.commons.io.FileUtils;
 
 /**
  * A class that contains all codegen configuration properties a user would want to manipulate.
@@ -430,10 +443,69 @@ public class CodegenConfigurator implements Serializable {
 
         Swagger swagger = new SwaggerParser().read(inputSpec, authorizationValues, true);
 
+        try{
+            FixSwaggerByYuanJian(swagger, inputSpec, authorizationValues);
+        }catch(Exception ex){
+            throw new RuntimeException(ex);
+        }
+
         input.opts(new ClientOpts())
                 .swagger(swagger);
 
         return input;
+    }
+    private void FixSwaggerByYuanJian(Swagger swagger, String location, List<AuthorizationValue> auths) throws Exception {
+        location = location.replaceAll("\\\\", "/");
+        String data;
+        if (location.toLowerCase().startsWith("http")) {
+            data = RemoteUrl.urlToString(location, auths);
+        } else {
+            String fileScheme = "file:";
+            Path path;
+            if (location.toLowerCase().startsWith("file:")) {
+                path = Paths.get(URI.create(location));
+            } else {
+                path = Paths.get(location);
+            }
+
+            if (Files.exists(path, new LinkOption[0])) {
+                data = FileUtils.readFileToString(path.toFile(), "UTF-8");
+            } else {
+                data = ClasspathHelper.loadFileFromClasspath(location);
+            }
+        }
+        //Now we get data yuanjian
+        ObjectMapper objectMapper = new ObjectMapper();
+        JsonNode root = objectMapper.readTree(data);
+        ObjectNode definitions = (ObjectNode) root.get("definitions");
+        Map<String, Model> originalDefinitions = swagger.getDefinitions();
+        for (Iterator<Map.Entry<String, JsonNode>> it = definitions.fields(); it.hasNext(); ) {
+            Map.Entry<String, JsonNode> model = it.next();
+            String modelKey = model.getKey();
+            ObjectNode modelDefinition = (ObjectNode) model.getValue();
+            ObjectNode properties = (ObjectNode) modelDefinition.get("properties");
+            Model originalDefinition = originalDefinitions.get(modelKey);
+            Map<String, Property> originalProperties = originalDefinition.getProperties();
+            if(properties == null) continue;
+            for (Iterator<Map.Entry<String, JsonNode>> it2 = properties.fields(); it2.hasNext(); ) {
+                Map.Entry<String, JsonNode> prop = it2.next();
+                String propKey = prop.getKey();
+                ObjectNode propDefinition = (ObjectNode) prop.getValue();
+                Property originalProperty = originalProperties.get(propKey);
+                for (Iterator<Map.Entry<String, JsonNode>> it3 = propDefinition.fields(); it3.hasNext(); ) {
+                    Map.Entry<String, JsonNode> field = it3.next();
+                    if (field.getKey().startsWith("x-")) {
+                        if(field.getValue().isBoolean()){
+                            ((AbstractProperty) originalProperty).setVendorExtension(field.getKey(), field.getValue().booleanValue());
+                        } else if(field.getValue().isNumber()){
+                            ((AbstractProperty) originalProperty).setVendorExtension(field.getKey(), field.getValue().longValue());
+                        } else if(field.getValue().isTextual()){
+                            ((AbstractProperty) originalProperty).setVendorExtension(field.getKey(), field.getValue().textValue());
+                        }
+                    }
+                }
+            }
+        }
     }
 
     @JsonAnySetter
@@ -513,3 +585,4 @@ public class CodegenConfigurator implements Serializable {
     }
 
 }
+
